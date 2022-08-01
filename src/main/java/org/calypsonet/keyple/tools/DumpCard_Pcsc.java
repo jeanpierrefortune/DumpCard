@@ -14,6 +14,7 @@ package org.calypsonet.keyple.tools;
 import org.calypsonet.terminal.calypso.GetDataTag;
 import org.calypsonet.terminal.calypso.SelectFileControl;
 import org.calypsonet.terminal.calypso.card.CalypsoCard;
+import org.calypsonet.terminal.calypso.card.CalypsoCardSelection;
 import org.calypsonet.terminal.calypso.card.ElementaryFile;
 import org.calypsonet.terminal.calypso.card.FileHeader;
 import org.calypsonet.terminal.calypso.transaction.CardTransactionManager;
@@ -40,8 +41,7 @@ import org.slf4j.LoggerFactory;
 public class DumpCard_Pcsc {
   private static final Logger logger = LoggerFactory.getLogger(DumpCard_Pcsc.class);
   private static final String CARD_READER_NAME = "ASK LoGO 0";
-  private static final String AID1 = "315449432E49434131";
-  private static final String AID2 = "315449432E49434132";
+  private static final String AID = "315449432E";
 
   private static final SmartCardService smartCardService = SmartCardServiceProvider.getService();
   private static final CalypsoExtensionService calypsoCardService =
@@ -66,13 +66,14 @@ public class DumpCard_Pcsc {
 
     CalypsoCard calypsoCard;
 
-    logger.info("Dumping the card file system for application {}...", AID1);
-    calypsoCard = getApplicationData(AID1);
-    logger.info("= SmartCard = {}", calypsoCard);
+    logger.info("Dumping the file system of all applications whose AID starts with {}...", AID);
 
-    logger.info("Dumping the card file system for application {}...", AID2);
-    calypsoCard = getApplicationData(AID2);
-    logger.info("= SmartCard = {}", calypsoCard);
+    calypsoCard = getApplicationData(CalypsoCardSelection.FileOccurrence.FIRST, AID);
+
+    while (calypsoCard != null) {
+      logger.info("= SmartCard = {}", calypsoCard);
+      calypsoCard = getApplicationData(CalypsoCardSelection.FileOccurrence.NEXT, AID);
+    }
 
     logger.info("End of processing.");
 
@@ -82,22 +83,25 @@ public class DumpCard_Pcsc {
   /**
    * Gets the data of the application specified by its AID.
    *
+   * @param fileOccurrence First or Next application.
    * @param aid A hex string containing the application identifier
    * @return A {@link CalypsoCard}
    */
-  private static CalypsoCard getApplicationData(String aid) {
+  private static CalypsoCard getApplicationData(
+      CalypsoCardSelection.FileOccurrence fileOccurrence, String aid) {
     CardSelectionManager cardSelectionManager = smartCardService.createCardSelectionManager();
     cardSelectionManager.prepareSelection(
-        calypsoCardService.createCardSelection().filterByDfName(aid).acceptInvalidatedCard());
+        calypsoCardService
+            .createCardSelection()
+            .filterByDfName(aid)
+            .setFileOccurrence(fileOccurrence)
+            .acceptInvalidatedCard());
     CardSelectionResult selectionResult =
         cardSelectionManager.processCardSelectionScenario(cardReader);
     CalypsoCard calypsoCard = (CalypsoCard) selectionResult.getActiveSmartCard();
-    if (calypsoCard == null) {
-      throw new IllegalStateException("The selection of the application '" + AID1 + "' failed.");
+    if (calypsoCard != null) {
+      discoverFileStructure(calypsoCard);
     }
-
-    discoverFileStructure(calypsoCard);
-
     return calypsoCard;
   }
 
@@ -160,7 +164,7 @@ public class DumpCard_Pcsc {
   }
 
   /** Class used to retrieve hidden information in CalypsoCard */
-  private class FileInfo {
+  private static class FileInfo {
     String currentSfi;
     String currentLid;
   }
