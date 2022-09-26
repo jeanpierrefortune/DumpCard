@@ -137,13 +137,13 @@ public class DumpCard_Pcsc {
       return false;
     }
     FileInfo fileInfo = getCurrentFileInfo(calypsoCard);
-    byte currentSfi = HexUtil.toByte(fileInfo.currentSfi);
-    FileHeader fileHeader = calypsoCard.getFileBySfi(currentSfi).getHeader();
+    short currentLid = HexUtil.toShort(fileInfo.currentLid);
+    FileHeader fileHeader = calypsoCard.getFileByLid(currentLid).getHeader();
     if (fileHeader.getEfType() != ElementaryFile.Type.BINARY
         && fileHeader.getAccessConditions()[0] != 1) {
       for (int i = 0; i < fileHeader.getRecordsNumber(); i++) {
         cardTransactionManager.prepareReadRecords(
-            currentSfi, i + 1, i + 1, fileHeader.getRecordSize());
+            (byte) 0, i + 1, i + 1, fileHeader.getRecordSize());
       }
       cardTransactionManager.processCommands();
     }
