@@ -11,6 +11,9 @@
  ************************************************************************************** */
 package org.calypsonet.keyple.tools;
 
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import org.calypsonet.terminal.calypso.GetDataTag;
 import org.calypsonet.terminal.calypso.SelectFileControl;
 import org.calypsonet.terminal.calypso.card.CalypsoCard;
@@ -18,7 +21,7 @@ import org.calypsonet.terminal.calypso.card.CalypsoCardSelection;
 import org.calypsonet.terminal.calypso.card.ElementaryFile;
 import org.calypsonet.terminal.calypso.card.FileHeader;
 import org.calypsonet.terminal.calypso.transaction.CardTransactionManager;
-import org.calypsonet.terminal.calypso.transaction.UnexpectedCommandStatusException;
+import org.calypsonet.terminal.calypso.transaction.SelectFileException;
 import org.calypsonet.terminal.reader.CardReader;
 import org.calypsonet.terminal.reader.selection.CardSelectionManager;
 import org.calypsonet.terminal.reader.selection.CardSelectionResult;
@@ -27,7 +30,6 @@ import org.eclipse.keyple.core.service.Plugin;
 import org.eclipse.keyple.core.service.SmartCardService;
 import org.eclipse.keyple.core.service.SmartCardServiceProvider;
 import org.eclipse.keyple.core.util.HexUtil;
-import org.eclipse.keyple.core.util.json.JsonUtil;
 import org.eclipse.keyple.plugin.pcsc.PcscPluginFactoryBuilder;
 import org.eclipse.keyple.plugin.pcsc.PcscReader;
 import org.slf4j.Logger;
@@ -41,7 +43,7 @@ import org.slf4j.LoggerFactory;
 public class DumpCard_Pcsc {
   private static final Logger logger = LoggerFactory.getLogger(DumpCard_Pcsc.class);
   private static final String CARD_READER_NAME = "ASK LoGO 0";
-  private static final String AID = "315449432E";
+  private static final String AID = "315449432E49434131"; // "315449432E"; //"A000000404";
 
   private static final SmartCardService smartCardService = SmartCardServiceProvider.getService();
   private static final CalypsoExtensionService calypsoCardService =
@@ -100,6 +102,9 @@ public class DumpCard_Pcsc {
         cardSelectionManager.processCardSelectionScenario(cardReader);
     CalypsoCard calypsoCard = (CalypsoCard) selectionResult.getActiveSmartCard();
     if (calypsoCard != null) {
+      logger.info(
+          "Select Application Response = {}",
+          HexUtil.toHex(calypsoCard.getSelectApplicationResponse()));
       discoverFileStructure(calypsoCard);
     }
     return calypsoCard;
@@ -116,9 +121,14 @@ public class DumpCard_Pcsc {
     cardTransactionManager.prepareSelectFile(SelectFileControl.CURRENT_DF);
     cardTransactionManager.prepareGetData(GetDataTag.TRACEABILITY_INFORMATION);
     cardTransactionManager.processCommands();
-    boolean dataDiscovered = getFileData(SelectFileControl.FIRST_EF, calypsoCard);
+    Set<ElementaryFile> files = new HashSet<ElementaryFile>();
+    boolean dataDiscovered = getFileData(SelectFileControl.FIRST_EF, calypsoCard, files);
     while (dataDiscovered) {
-      dataDiscovered = getFileData(SelectFileControl.NEXT_EF, calypsoCard);
+      dataDiscovered = getFileData(SelectFileControl.NEXT_EF, calypsoCard, files);
+    }
+    List<byte[]> transactionAuditData = cardTransactionManager.getTransactionAuditData();
+    for (byte[] commandData : transactionAuditData) {
+      logger.info("data = {}", HexUtil.toHex(commandData));
     }
   }
 
@@ -127,18 +137,32 @@ public class DumpCard_Pcsc {
    *
    * @param selectFileControl First or next EF.
    * @param calypsoCard A {@link CalypsoCard}
+   * @param currentFiles The already read files.
    * @return true if the operation succeeded, false if not (end of the file structure reached).
    */
-  private static boolean getFileData(SelectFileControl selectFileControl, CalypsoCard calypsoCard) {
+  private static boolean getFileData(
+      SelectFileControl selectFileControl,
+      CalypsoCard calypsoCard,
+      Set<ElementaryFile> currentFiles) {
     cardTransactionManager.prepareSelectFile(selectFileControl);
     try {
       cardTransactionManager.processCommands();
-    } catch (UnexpectedCommandStatusException e) {
+    } catch (SelectFileException e) {
+      logger.info("No more files found");
       return false;
     }
-    FileInfo fileInfo = getCurrentFileInfo(calypsoCard);
-    short currentLid = HexUtil.toShort(fileInfo.currentLid);
-    FileHeader fileHeader = calypsoCard.getFileByLid(currentLid).getHeader();
+    ElementaryFile newFile = null;
+    Set<ElementaryFile> newFiles = calypsoCard.getFiles();
+    // determine which file in newFiles is not in currentFiles
+    for (ElementaryFile file : newFiles) {
+      if (!currentFiles.contains(file)) {
+        newFile = file;
+        break;
+      }
+    }
+    // update current files
+    currentFiles.add(newFile);
+    FileHeader fileHeader = newFile.getHeader();
     if (fileHeader.getEfType() != ElementaryFile.Type.BINARY
         && fileHeader.getAccessConditions()[0] != 1) {
       for (int i = 0; i < fileHeader.getRecordsNumber(); i++) {
@@ -148,24 +172,5 @@ public class DumpCard_Pcsc {
       cardTransactionManager.processCommands();
     }
     return true;
-  }
-
-  /**
-   * Extracts the SFI and LID of the current file.
-   *
-   * <p>This is a hack using the CalypsoCard Json data since there is no get for these fields.
-   *
-   * @param calypsoCard A {@link CalypsoCard}
-   * @return A {@link FileInfo} object.
-   */
-  private static FileInfo getCurrentFileInfo(CalypsoCard calypsoCard) {
-    String calypsoCardJson = calypsoCard.toString();
-    return JsonUtil.getParser().fromJson(calypsoCardJson, FileInfo.class);
-  }
-
-  /** Class used to retrieve hidden information in CalypsoCard */
-  private static class FileInfo {
-    String currentSfi;
-    String currentLid;
   }
 }
